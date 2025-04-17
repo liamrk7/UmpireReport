@@ -1,0 +1,717 @@
+library(shiny)
+library(ggplot2)
+library(scales)
+library(gridExtra)
+library(dplyr)
+library(grid)
+library(gridtext)
+library(ggiraph)
+library(tibble)
+library(tidyr)
+library(rsconnect)
+library(quarto)
+library(cachem)
+library(bslib)
+
+Lower=1.5
+Upper=3.3773
+Side=.83083
+
+Lower_Buffer=1.3775
+Upper_Buffer=3.5
+Side_Buffer=.9975
+
+x <- c(-Side,Side,Side,-Side,-Side)
+
+z <- c(Lower,Lower,Upper,Upper,Lower)
+sz <- data.frame(x,z)
+
+
+x <- c(-Side_Buffer,Side_Buffer,Side_Buffer,-Side_Buffer,-Side_Buffer)
+z <- c(Lower_Buffer,Lower_Buffer,Upper_Buffer,Upper_Buffer,Lower_Buffer)
+sz_Buffer <- data.frame(x,z)
+
+x <- c(-8.5/12,8.5/12)
+z <- c(0)
+Plate <- data.frame(x,z)
+
+MissedCalls <- function(df) {
+  df_table <- df %>%
+    mutate(
+      MissedCall_B = ifelse(
+        PlateLocHeight < Upper & PlateLocHeight > Lower & 
+          PlateLocSide < Side & PlateLocSide > -Side & 
+          PitchCall == "BallCalled", 
+        1, 0
+      ),
+      MissedCall_S = ifelse(
+        (PlateLocHeight > Upper | PlateLocHeight < Lower | 
+           PlateLocSide > Side | PlateLocSide < -Side) & 
+          PitchCall == "StrikeCalled", 
+        1, 0
+      ),
+      MissedCall = ifelse(MissedCall_B == 1 | MissedCall_S == 1, 1, 0)
+    ) %>%
+    filter(MissedCall == 1) %>%
+    select(Inning, Pitcher, PitcherTeam, Batter, BatterTeam, Balls, Strikes, Outs, TaggedPitchType, PitchCall) %>%
+    mutate(
+      CorrectCall = case_when(
+        PitchCall == "StrikeCalled" ~ "BallCalled",
+        PitchCall == "BallCalled" ~ "StrikeCalled",
+        TRUE ~ "None"
+      ),
+      Benefits = case_when(
+        PitchCall == "StrikeCalled" ~ PitcherTeam,
+        PitchCall == "BallCalled" ~ BatterTeam,
+        TRUE ~ "None"
+      )
+    )
+  
+  return(df_table)
+}
+
+accuracyTable_Buffer <- function(df) {
+  Upper <- 3.3773 + 0.11
+  Lower <- 1.5 - 0.11
+  Side <- .83083 + 0.11
+  
+  df_table <- data.frame(
+    Relation_to_Strike_Zone = c("Inside", "Inside", "Outside", "Outside", "Total"),
+    Pitch_Calls = c("Ball", "Strike", "Ball", "Strike", " "),
+    Total_Calls = c(
+      sum(
+        df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+          df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+          df$PitchCall == "BallCalled"
+      ),
+      sum(
+        df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+          df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+          df$PitchCall == "StrikeCalled"
+      ),
+      sum(
+        (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+           df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+          df$PitchCall == "BallCalled"
+      ),
+      sum(
+        (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+           df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+          df$PitchCall == "StrikeCalled"
+      ),
+      sum(
+        df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+          df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+          df$PitchCall == "BallCalled"
+      ) +
+        sum(
+          df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+            df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+            df$PitchCall == "StrikeCalled"
+        ) +
+        sum(
+          (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+             df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+            df$PitchCall == "BallCalled"
+        ) +
+        sum(
+          (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+             df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+            df$PitchCall == "StrikeCalled"
+        )
+    ),
+    Accuracy = c(
+      " ",
+      percent(
+        sum(
+          df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+            df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+            df$PitchCall == "StrikeCalled"
+        ) /
+          (
+            sum(
+              df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+                df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+                df$PitchCall == "BallCalled"
+            ) + 
+              sum(
+                df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+                  df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+                  df$PitchCall == "StrikeCalled"
+              )
+          ),.01
+      ),
+      " ",
+      percent(
+        sum(
+          (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+             df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+            df$PitchCall == "BallCalled"
+        ) /
+          (
+            sum(
+              (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                 df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                df$PitchCall == "BallCalled"
+            ) + 
+              sum(
+                (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                   df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                  df$PitchCall == "StrikeCalled"
+              )
+          ),.01
+      ),
+      percent(
+        1 - (
+          sum(
+            df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+              df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+              df$PitchCall == "BallCalled"
+          ) +
+            sum(
+              (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                 df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                df$PitchCall == "StrikeCalled"
+            )
+        ) / 
+          (
+            sum(
+              df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+                df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+                df$PitchCall == "BallCalled"
+            ) +
+              sum(
+                df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+                  df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+                  df$PitchCall == "StrikeCalled"
+              ) +
+              sum(
+                (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                   df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                  df$PitchCall == "BallCalled"
+              ) +
+              sum(
+                (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                   df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                  df$PitchCall == "StrikeCalled"
+              )
+          ), 0.01
+      )
+    )
+  )
+  
+  return(df_table)
+}
+
+accuracyTable <- function(df) {
+  Upper <- 3.3773
+  Lower <- 1.5 
+  Side <- .83083  
+  
+  df_table <- data.frame(
+    Relation_to_Strike_Zone = c("Inside", "Inside", "Outside", "Outside", "Total"),
+    Pitch_Calls = c("Ball", "Strike", "Ball", "Strike", " "),
+    Total_Calls = c(
+      sum(
+        df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+          df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+          df$PitchCall == "BallCalled"
+      ),
+      sum(
+        df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+          df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+          df$PitchCall == "StrikeCalled"
+      ),
+      sum(
+        (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+           df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+          df$PitchCall == "BallCalled"
+      ),
+      sum(
+        (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+           df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+          df$PitchCall == "StrikeCalled"
+      ),
+      sum(
+        df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+          df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+          df$PitchCall == "BallCalled"
+      ) +
+        sum(
+          df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+            df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+            df$PitchCall == "StrikeCalled"
+        ) +
+        sum(
+          (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+             df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+            df$PitchCall == "BallCalled"
+        ) +
+        sum(
+          (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+             df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+            df$PitchCall == "StrikeCalled"
+        )
+    ),
+    Accuracy = c(
+      " ",
+      percent(
+        sum(
+          df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+            df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+            df$PitchCall == "StrikeCalled"
+        ) /
+          (
+            sum(
+              df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+                df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+                df$PitchCall == "BallCalled"
+            ) + 
+              sum(
+                df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+                  df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+                  df$PitchCall == "StrikeCalled"
+              )
+          ),.01
+      ),
+      " ",
+      percent(
+        sum(
+          (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+             df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+            df$PitchCall == "BallCalled"
+        ) /
+          (
+            sum(
+              (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                 df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                df$PitchCall == "BallCalled"
+            ) + 
+              sum(
+                (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                   df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                  df$PitchCall == "StrikeCalled"
+              )
+          ),.01
+      ),
+      percent(
+        1 - (
+          sum(
+            df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+              df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+              df$PitchCall == "BallCalled"
+          ) +
+            sum(
+              (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                 df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                df$PitchCall == "StrikeCalled"
+            )
+        ) / 
+          (
+            sum(
+              df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+                df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+                df$PitchCall == "BallCalled"
+            ) +
+              sum(
+                df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+                  df$PlateLocSide < Side & df$PlateLocSide > -Side & 
+                  df$PitchCall == "StrikeCalled"
+              ) +
+              sum(
+                (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                   df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                  df$PitchCall == "BallCalled"
+              ) +
+              sum(
+                (df$PlateLocHeight > Upper | df$PlateLocHeight < Lower | 
+                   df$PlateLocSide > Side | df$PlateLocSide < -Side) & 
+                  df$PitchCall == "StrikeCalled"
+              )
+          ), 0.01
+      )
+    )
+  )
+  return(df_table)
+}
+
+bufferZone <- function(df) {
+  Upper <- 3.3773
+  Lower <- 1.5 
+  Side <- 0.83083  
+  Upper_Buffer <- 3.5
+  Lower_Buffer <- 1.3775
+  Side_Buffer <- 0.9975
+  
+  df_table <- data.frame(
+    Buffer_Zone_Area = c("Top", "Bottom", "Left", "Right", "Total"),
+    Balls_Called = c(
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Upper & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "BallCalled"),
+      
+      sum(df$PlateLocHeight < Lower & df$PlateLocHeight > Lower_Buffer & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "BallCalled"),
+      
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Lower_Buffer & 
+            df$PlateLocSide < -Side & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "BallCalled"),
+      
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Lower_Buffer & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > Side & 
+            df$PitchCall == "BallCalled"),
+      
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Upper & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "BallCalled") +
+        
+        sum(df$PlateLocHeight < Lower & df$PlateLocHeight > Lower_Buffer & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "BallCalled") + 
+        
+        sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Lower_Buffer & 
+              df$PlateLocSide < -Side & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "BallCalled") +
+        
+        sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Lower_Buffer & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > Side & 
+              df$PitchCall == "BallCalled")
+    ),
+    Strikes_Called = c(
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Upper & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "StrikeCalled"),
+      
+      sum(df$PlateLocHeight < Lower & df$PlateLocHeight > Lower_Buffer & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "StrikeCalled"),
+      
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Lower_Buffer & 
+            df$PlateLocSide < -Side & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "StrikeCalled"),
+      
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Lower_Buffer & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > Side & 
+            df$PitchCall == "StrikeCalled"),
+      
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Upper & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "StrikeCalled") +
+        
+        sum(df$PlateLocHeight < Lower & df$PlateLocHeight > Lower_Buffer & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "StrikeCalled") + 
+        
+        sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Lower_Buffer & 
+              df$PlateLocSide < -Side & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "StrikeCalled") +
+        
+        sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Lower_Buffer & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > Side & 
+              df$PitchCall == "StrikeCalled")
+    ),
+    Total_Called = c(
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Upper & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "StrikeCalled") +
+        sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Upper & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "BallCalled"),
+      
+      sum(df$PlateLocHeight < Lower & df$PlateLocHeight > Lower_Buffer & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "StrikeCalled") +
+        sum(df$PlateLocHeight < Lower & df$PlateLocHeight > Lower_Buffer & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "BallCalled"),
+      
+      sum(df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+            df$PlateLocSide < -Side & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "StrikeCalled") +
+        sum(df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+              df$PlateLocSide < -Side & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "BallCalled"),
+      
+      sum(df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > Side & 
+            df$PitchCall == "StrikeCalled") +
+        sum(df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > Side & 
+              df$PitchCall == "BallCalled"),
+      
+      sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Upper & 
+            df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+            df$PitchCall == "StrikeCalled") +
+        
+        sum(df$PlateLocHeight < Lower & df$PlateLocHeight > Lower_Buffer & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "StrikeCalled") +
+        
+        sum(df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+              df$PlateLocSide < -Side & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "StrikeCalled") +
+        
+        sum(df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > Side & 
+              df$PitchCall == "StrikeCalled") +
+        
+        sum(df$PlateLocHeight < Upper_Buffer & df$PlateLocHeight > Upper & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "BallCalled") +
+        
+        sum(df$PlateLocHeight < Lower & df$PlateLocHeight > Lower_Buffer & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "BallCalled") +
+        
+        sum(df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+              df$PlateLocSide < -Side & df$PlateLocSide > -Side_Buffer & 
+              df$PitchCall == "BallCalled") +
+        
+        sum(df$PlateLocHeight < Upper & df$PlateLocHeight > Lower & 
+              df$PlateLocSide < Side_Buffer & df$PlateLocSide > Side & 
+              df$PitchCall == "BallCalled")
+    )
+  )
+  
+  return(df_table)
+}
+
+getFirstDate <- function(df) {
+  if (!is.data.frame(df)) {
+    stop("Input is not a data frame.")
+  }
+  
+  if ("Date" %in% names(df)) {
+    if (nrow(df) > 0) {
+      return(df$Date[1])
+    } else {
+      return(NA)
+    }
+  } else {
+    stop("The data frame does not contain a 'Date' column.")
+  }
+}
+
+ui <- fluidPage(
+  titlePanel("FSU Umpire Reports"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      fileInput("file1", "Choose CSV File", 
+                accept = c("text/csv", "text/comma-separated-values,text/plain", ".csv")),
+      textInput("text1", "Umpire:", value = " "),
+      textInput("text2", "Opponent", value = " "),
+      tags$hr()
+    ),
+    
+    mainPanel(
+      uiOutput("state"),
+      tabsetPanel(type = "tabs",
+                  tabPanel("Location - Total Game", plotOutput("LocPlot", width = "100%", height = "600px")),
+                  tabPanel("Location - FSU", plotOutput("LocPlot_FSU", width = "100%", height = "600px")),
+                  tabPanel("Location - Opp", plotOutput("LocPlot_Opp", width = "100%", height = "600px")),
+                  tabPanel("Accuracy Measures - No Buffer", tableOutput("accuracyTable")),
+                  tabPanel("Accuracy Measures - w/ Buffer", tableOutput("accuracyTable_Buffer")),
+                  tabPanel("Buffer Zones", tableOutput("bufferZone")),
+                  tabPanel("Missed Calls", tableOutput("MissedCalls")),
+                  tabPanel("Missed Calls - Visuals", girafeOutput("MissedCallVis", width = "100%", height = "600px"),h4("Interactive Plot: Hover Over Points")),
+                  tabPanel("PDF", 
+                           downloadButton("downloadPDF", "Download Plots as PDF")
+                  )
+      )
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  
+  observe({
+    print(input$text1)
+    print(input$text2)
+  })
+  
+  data <- reactive({
+    req(input$file1)
+    df <- read.csv(input$file1$datapath, stringsAsFactors = FALSE)
+    df <- df[df$PitchCall %in% c("StrikeCalled", "BallCalled"), ]
+    return(df)
+  })
+  
+  locPlot <- reactive({
+    df <- data()
+    ggplot(df) +
+      geom_point(aes(x = PlateLocSide, y = PlateLocHeight, color = PitchCall), size = 1.25, alpha = 1, na.rm = TRUE) +
+      geom_path(data = sz, aes(x = x, y = z)) +
+      geom_path(data = sz_Buffer, aes(x = x, y = z), linetype = 5) +
+      geom_path(data = Plate, aes(x = x, y = z), linewidth = 1.5) +
+      scale_color_manual(values = c("StrikeCalled" = "red", "BallCalled" = "blue")) +
+      coord_equal() + ylim(-1, 5) + xlim(-3.5, 3) +
+      labs(title = "Pitch Location - Total Game", subtitle = df$Date[1]) + 
+      theme(legend.position = "bottom", 
+            panel.grid.major = element_line(colour = "grey70"), 
+            panel.grid.minor = element_line(colour = "grey80"))
+  })
+  
+  locPlot_FSU <- reactive({
+    df <- data()
+    FSU_data <- subset(df, PitcherTeam == "FLO_SEM")
+    ggplot(FSU_data) +
+      geom_point(aes(x = PlateLocSide, y = PlateLocHeight, color = PitchCall), size = 1.25, alpha = 1, na.rm = TRUE) +
+      geom_path(data = sz, aes(x = x, y = z)) +
+      geom_path(data = sz_Buffer, aes(x = x, y = z), linetype = 5) +
+      geom_path(data = Plate, aes(x = x, y = z), linewidth = 1.5) +
+      scale_color_manual(values = c("StrikeCalled" = "red", "BallCalled" = "blue")) +
+      coord_equal() + ylim(-1, 5) + xlim(-3.5, 3) +
+      labs(title = "FSU Pitch Location") +
+      theme(legend.position = "bottom", 
+            panel.grid.major = element_line(colour = "grey70"), 
+            panel.grid.minor = element_line(colour = "grey80"))
+  })
+  
+  locPlot_Opp <- reactive({
+    df <- data()
+    Opp_data <- subset(df, BatterTeam == "FLO_SEM")
+    ggplot(Opp_data) +
+      geom_point(aes(x = PlateLocSide, y = PlateLocHeight, color = PitchCall), size = 1.25, alpha = 1, na.rm = TRUE) +
+      geom_path(data = sz, aes(x = x, y = z)) +
+      geom_path(data = sz_Buffer, aes(x = x, y = z), linetype = 5) +
+      geom_path(data = Plate, aes(x = x, y = z), linewidth = 1.5) +
+      scale_color_manual(values = c("StrikeCalled" = "red", "BallCalled" = "blue")) +
+      coord_equal() + ylim(-1, 5) + xlim(-3.5, 3) +
+      labs(title = "Opponent Pitch Location", subtitle = input$text2) +
+      theme(legend.position = "bottom", 
+            panel.grid.major = element_line(colour = "grey70"), 
+            panel.grid.minor = element_line(colour = "grey80"))
+  })
+  
+  MissedCallVis <- reactive({
+    df <- data()
+    MCData <- subset(
+      df,
+      (
+        (PlateLocHeight > Upper | PlateLocHeight < Lower | PlateLocSide > Side | PlateLocSide < -Side) & 
+          PitchCall == "StrikeCalled"
+      ) | 
+        (
+          (PlateLocHeight < Upper & PlateLocHeight > Lower & PlateLocSide < Side & PlateLocSide > -Side) & 
+            PitchCall == "BallCalled"
+        )
+    )
+    girafe(ggobj = ggplot(MCData) +
+             geom_point_interactive(aes(x = PlateLocSide, y = PlateLocHeight, color = PitchCall, tooltip = paste(Inning, Pitcher, Batter, Balls, Strikes, sep = " ")), size = 1.25, alpha = 1, na.rm = TRUE) +
+             geom_path(data = sz, aes(x = x, y = z)) +
+             geom_path(data = sz_Buffer, aes(x = x, y = z), linetype = 5) +
+             geom_path(data = Plate, aes(x = x, y = z), linewidth = 1.5) +
+             scale_color_manual(values = c("StrikeCalled" = "red", "BallCalled" = "blue")) +
+             coord_equal() + ylim(-1, 5) + xlim(-3.5, 3) +
+             labs(title = "Total Game - Missed Calls", subtitle = "Interactive Format: 'Inning' 'Pitcher' 'Batter' 'Count'") +
+             theme(legend.position = "bottom", 
+                   panel.grid.major = element_line(colour = "grey70"), 
+                   panel.grid.minor = element_line(colour = "grey80")))
+  })
+  
+  output$LocPlot <- renderPlot({ locPlot() })
+  output$LocPlot_FSU <- renderPlot({ locPlot_FSU() })
+  output$LocPlot_Opp <- renderPlot({ locPlot_Opp() })
+  output$MissedCallVis <- renderGirafe({ MissedCallVis() })
+  
+  output$accuracyTable <- renderTable({
+    df <- data()
+    accuracyTable(df)
+  })
+  
+  output$getFirstDate <- renderText({
+    df <- data()
+    getFirstDate(df)
+  })
+  
+  output$accuracyTable_Buffer <- renderTable({
+    df <- data()
+    accuracyTable_Buffer(df)
+  })
+  
+  output$bufferZone <- renderTable({
+    df <- data()
+    bufferZone(df)
+  })
+  
+  output$MissedCalls <- renderTable({
+    df <- data()
+    MissedCalls(df)
+  })
+  
+  output$downloadPDF <- downloadHandler(
+    filename = function() {
+      paste("Umpire Report", input$text1, Sys.Date(), ".pdf", sep = "")
+    },
+    content = function(file) {
+      pdf(file, width = 8, height = 10) 
+      
+      grid.arrange(
+        arrangeGrob(
+          textGrob("Umpire Report", gp = gpar(fontsize = 30, fontface = "bold"), just = "center", 
+                   vp = viewport(height = unit(0.30, "npc"))
+          ),
+          textGrob(input$text1, gp = gpar(fontsize = 20, fontface = "italic"), just = "center",
+                   vp = viewport(height = unit(0.1, "npc")) 
+          ),
+          ncol = 1,
+          heights = c(0.15, 0.1) 
+        ),
+        arrangeGrob(
+          locPlot(),
+          vp = viewport(width = 0.92, height = 0.92)
+        ),
+        ncol = 1,
+        heights = c(0.2, 0.8)
+      )
+      
+      grid.arrange(
+        arrangeGrob(
+          textGrob("Umpire Report - By Team", gp = gpar(fontsize = 15, fontface = "bold"), just = "center", 
+                   vp = viewport(height = unit(0.2, "npc"))
+          ),
+          arrangeGrob(
+            locPlot_FSU(),
+            locPlot_Opp(),
+            vp = viewport(width = 0.95, height = 0.95)
+          ),
+          heights = c(0.1, 0.9),
+          ncol = 1
+        )
+      )
+      
+      grid.newpage()
+      grid.text("Accuracy Measures - No Buffer", x = 0.5, y = 0.89, gp = gpar(fontsize = 15, fontface = "bold"))
+      pushViewport(viewport(x = 0.5, y = 0.97, width = 0.8, height = 0.4, just = c("center", "top")))
+      grid.draw(tableGrob(accuracyTable(data()), rows = NULL))
+      upViewport()
+      
+      grid.text("Accuracy Measures - With Buffer", x = 0.5, y = 0.65, gp = gpar(fontsize = 15, fontface = "bold"))
+      pushViewport(viewport(x = 0.5, y = 0.72, width = 0.8, height = 0.4, just = c("center", "top")))
+      grid.draw(tableGrob(accuracyTable_Buffer(data()), rows = NULL))
+      upViewport()
+      
+      grid.text("Buffer Zone", x = 0.5, y = 0.38, gp = gpar(fontsize = 15, fontface = "bold"))
+      pushViewport(viewport(x = 0.5, y = 0.45, width = 0.8, height = 0.4, just = c("center", "top")))
+      grid.draw(tableGrob(bufferZone(data()), rows = NULL))
+      upViewport()
+      
+      grid.newpage()
+      grid.text("Missed Calls", x = 0.5, y = 0.85, gp = gpar(fontsize = 15, fontface = "bold"))
+      small_theme <- ttheme_default(
+        core = list(fg_params = list(cex = 0.5)),  
+        colhead = list(fg_params = list(cex = 0.5)),  
+        rowhead = list(fg_params = list(cex = 0.5)) 
+      )
+      
+      grid.table(MissedCalls(data()), theme = small_theme)
+      
+      dev.off()
+    }
+  )
+}
+
+shinyApp(ui = ui, server = server)
+
