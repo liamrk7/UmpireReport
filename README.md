@@ -1,2 +1,2 @@
 # UmpireReport
-Create Umpire Reports from Trackman Files
+Create Interactive Umpire Reports from Trackman files using Shiny App website
